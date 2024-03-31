@@ -31,3 +31,7 @@ pip install tinytorchutil
 4. Train the GPT model using your dataset.
 
 5. Once trained, you can use the model to generate text similar to the training data.
+
+## Acknowledgments:
+
+This project was inspired by Andrej Karpathy's NLP teachings and is aimed to better the understanding of relevant concepts.
