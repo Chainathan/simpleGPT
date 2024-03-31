@@ -1,7 +1,6 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
 from torch.nn import init
 
 from tinytorchutil import *
@@ -44,14 +43,14 @@ class CharSeqDataset():
         return seq, target
 
 tokens = tokenizer.encode(data)
-n = len(tokens)*train_split
+n = int(len(tokens)*train_split)
 tds = CharSeqDataset(tokens[:n], block_size)
 vds = CharSeqDataset(tokens[n:], block_size)
 
 dls = DataLoaders(tds, vds, bs=batch_size)
 
 class Head(nn.Module):
-    def __init__(self, head_size):
+    def __init__(self, head_size, embed_size, dropout, block_size):
         super().__init__()
         self.key = nn.Linear(embed_size, head_size, bias=False)
         self.query = nn.Linear(embed_size, head_size, bias=False)
@@ -74,9 +73,9 @@ class Head(nn.Module):
         return attention
 
 class MultiHeadedAttention(nn.Module):
-    def __init__(self, n_head, head_size):
+    def __init__(self, n_head, head_size, embed_size, dropout, block_size):
         super().__init__()
-        self.heads = nn.ModuleList([Head(head_size)] * n_head)
+        self.heads = nn.ModuleList([Head(head_size, embed_size, dropout, block_size) for _ in range(n_head)])
         self.ln = nn.Linear(n_head * head_size, embed_size)
         self.dropout = nn.Dropout(dropout)
     
@@ -87,7 +86,7 @@ class MultiHeadedAttention(nn.Module):
         return multi_atn
     
 class FeedForward(nn.Module):
-    def __init__(self, embed_size):
+    def __init__(self, embed_size, n_hidden, dropout):
         super().__init__()
         self.seq = nn.Sequential(
             nn.Linear(embed_size, embed_size * n_hidden),
@@ -100,26 +99,28 @@ class FeedForward(nn.Module):
         return self.seq(x)
     
 class Block(nn.Module):
-    def __init__(self, embed_size, n_head):
+    def __init__(self, embed_size, n_head, n_hidden, dropout, block_size):
         super().__init__()
         self.head_size = embed_size // n_head
-        self.multihead = MultiHeadedAttention(n_head, self.head_size)
-        self.fdfwd = FeedForward(embed_size)
+        self.multihead = MultiHeadedAttention(n_head, self.head_size, embed_size, dropout, block_size)
+        self.fdfwd = FeedForward(embed_size, n_hidden, dropout)
         self.layernorm1 = nn.LayerNorm(embed_size)
         self.layernorm2 = nn.LayerNorm(embed_size)
     
     def forward(self, x):
-        out = self.multihead(x)
-        out = self.layernorm1(out + x)
-        out = self.fdfwd(out)
-        out = self.layernorm2(out + x)
+        out = self.layernorm1(x)
+        out = x + self.multihead(out)
+        out = self.layernorm2(out)
+        out = x + self.fdfwd(out)
+        return out
 
 class TransformerGPTModel(nn.Module):
-    def __init__(self, embed_size, n_block, n_head, block_size, vocab_size):
+    def __init__(self, embed_size, n_block, n_head, block_size, vocab_size, n_hidden, dropout):
+        super().__init__()
         fc.store_attr()
         self.inp_emb = nn.Embedding(vocab_size, embed_size)
         self.pos_emb = nn.Embedding(block_size, embed_size)
-        self.atn_blks = nn.Sequential(*[Block(embed_size, n_head) for _ in range(n_block)])
+        self.atn_blks = nn.Sequential(*[Block(embed_size, n_head, n_hidden, dropout, block_size) for _ in range(n_block)])
         self.layernorm = nn.LayerNorm(embed_size)
         self.lin = nn.Linear(embed_size, vocab_size)
 
@@ -157,7 +158,7 @@ class GPTLearner(TrainLearner):
         bs, ts, ch = self.preds.shape
         self.loss = self.loss_func(self.preds.view(bs*ts, ch), self.batch[1].view(bs*ts))
 
-model = TransformerGPTModel(embed_size, n_atn_block, n_head, block_size, tokenizer.vocab_size)
+model = TransformerGPTModel(embed_size, n_atn_block, n_head, block_size, tokenizer.vocab_size, n_hidden, dropout)
 opt = torch.optim.AdamW
 loss_func = F.cross_entropy
 cbs = [ProgressCB(), MetricsCB(), DeviceCB()]
